@@ -148,6 +148,7 @@ impl Cpu {
                 C,
                 (a as u16) + (value as u16) + (carry as u16) > 0xFF,
             );
+        self.registers.a=new_a;
         self.clock.m += 4;
     }
     #[inline]
@@ -168,7 +169,7 @@ impl Cpu {
     fn sub_8bit_value(&mut self, value: u8, use_carry: bool) {
         let carry = self.use_carry(use_carry);
         let a =self.registers.a;
-        let new_a = a.wrapping_add(value).wrapping_add(carry);
+        let new_a = a.wrapping_sub(value).wrapping_sub(carry);
         self.registers
             .flag(Z, new_a == 0)
             .flag(H, (a & 0x0F) < (value & 0x0F) + carry)
@@ -181,4 +182,155 @@ impl Cpu {
         self.clock.m += 4;
     }
 
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::register::Registers;
+
+    fn create_cpu() -> Cpu {
+        Cpu {
+            clock: Clock { m: 0, t: 0 },
+            registers:Registers::default()
+        }
+    }
+
+    #[test]
+    fn test_get_register_from_register16bit() {
+        let mut cpu = create_cpu();
+        cpu.registers.write_bc(0x1234);
+        cpu.registers.write_de(0x5678);
+        cpu.registers.write_hl(0x9ABC);
+
+        assert_eq!(cpu.get_register_from_register16bit(Register16bit::BC), 0x1234);
+        assert_eq!(cpu.get_register_from_register16bit(Register16bit::DE), 0x5678);
+        assert_eq!(cpu.get_register_from_register16bit(Register16bit::HL), 0x9ABC);
+    }
+
+    #[test]
+    fn test_load_16bit_value_into_register() {
+        let mut cpu = create_cpu();
+
+        cpu.load_16bit_value_into_register(Register16bit::BC, 0x1111);
+        assert_eq!(cpu.registers.get_bc(), 0x1111);
+        assert_eq!(cpu.clock.m, 10);
+
+        cpu.load_16bit_value_into_register(Register16bit::DE, 0x2222);
+        assert_eq!(cpu.registers.get_de(), 0x2222);
+        assert_eq!(cpu.clock.m, 20);
+
+        cpu.load_16bit_value_into_register(Register16bit::HL, 0x3333);
+        assert_eq!(cpu.registers.get_hl(), 0x3333);
+        assert_eq!(cpu.clock.m, 30);
+    }
+
+    #[test]
+    fn test_load_8bit_value_into_register() {
+        let mut cpu = create_cpu();
+
+        cpu.load_8bit_value_into_register(Register8bit::A, 0xAA);
+        assert_eq!(cpu.registers.a, 0xAA);
+        assert_eq!(cpu.clock.m, 7);
+
+        cpu.load_8bit_value_into_register(Register8bit::B, 0xBB);
+        assert_eq!(cpu.registers.b, 0xBB);
+        assert_eq!(cpu.clock.m, 14);
+    }
+
+    #[test]
+    fn test_inc_u8_refm() {
+        let mut val = 0xFE;
+        assert_eq!(Cpu::inc_u8_refm(&mut val), 0xFF);
+        assert_eq!(val, 0xFF);
+
+        assert_eq!(Cpu::inc_u8_refm(&mut val), 0x00);
+        assert_eq!(val, 0x00);
+    }
+
+    #[test]
+    fn test_inc_8bit_register() {
+        let mut cpu = create_cpu();
+        cpu.registers.a = 0xFE;
+        cpu.inc_8bit_register(Register8bit::A);
+        assert_eq!(cpu.registers.a, 0xFF);
+        assert_eq!(cpu.registers.get_flag(Z), false);
+        assert_eq!(cpu.registers.get_flag(H), true);
+        assert_eq!(cpu.clock.m, 4);
+    }
+
+    #[test]
+    fn test_inc_16bit_register() {
+        let mut cpu = create_cpu();
+        cpu.registers.write_bc(0xFFFE);
+        cpu.inc_16bit_register(Register16bit::BC);
+        assert_eq!(cpu.registers.get_bc(), 0xFFFF);
+        assert_eq!(cpu.clock.m, 8);
+    }
+
+    #[test]
+    fn test_dec_8bit_register() {
+        let mut cpu = create_cpu();
+        cpu.registers.a = 0x01;
+        cpu.dec_8bit_register(Register8bit::A);
+        assert_eq!(cpu.registers.a, 0x00);
+        assert_eq!(cpu.registers.get_flag(Z), true);
+        assert_eq!(cpu.registers.get_flag(N), true);
+        assert_eq!(cpu.registers.get_flag(H), true);
+        assert_eq!(cpu.clock.m, 4);
+    }
+
+    #[test]
+    fn test_dec_16bit_register() {
+        let mut cpu = create_cpu();
+        cpu.registers.write_bc(0x0001);
+        cpu.dec_16bit_register(Register16bit::BC);
+        assert_eq!(cpu.registers.get_bc(), 0);
+        assert_eq!(cpu.clock.m, 6);
+    }
+
+    #[test]
+    fn test_use_carry() {
+        let mut cpu = create_cpu();
+        cpu.registers.flag(C,true);
+        assert_eq!(cpu.use_carry(true), 1);
+        assert_eq!(cpu.use_carry(false), 0);
+    }
+
+    #[test]
+    fn test_add_8bit_value() {
+        let mut cpu = create_cpu();
+        cpu.registers.a = 0x50;
+        cpu.add_8bit_value(0x10, false);
+        assert_eq!(cpu.registers.a, 0x60);
+        assert_eq!(cpu.registers.get_flag(Z), false);
+        assert_eq!(cpu.registers.get_flag(N), false);
+        assert_eq!(cpu.registers.get_flag(H), false);
+        assert_eq!(cpu.registers.get_flag(C), false);
+        assert_eq!(cpu.clock.m, 4);
+    }
+
+    #[test]
+    fn test_add_16bit_value() {
+        let mut cpu = create_cpu();
+        cpu.registers.write_hl(0x1000);
+        cpu.add_16bit_value(0x0100);
+        assert_eq!(cpu.registers.get_hl(), 0x1100);
+        assert_eq!(cpu.registers.get_flag(H), false);
+        assert_eq!(cpu.registers.get_flag(C), false);
+        assert_eq!(cpu.registers.get_flag(N), false);
+        assert_eq!(cpu.clock.m, 8);
+    }
+
+    #[test]
+    fn test_sub_8bit_value() {
+        let mut cpu = create_cpu();
+        cpu.registers.a = 0x60;
+        cpu.sub_8bit_value(0x10, false);
+        assert_eq!(cpu.registers.a, 0x50);
+        assert_eq!(cpu.registers.get_flag(Z), false);
+        assert_eq!(cpu.registers.get_flag(N), true);
+        assert_eq!(cpu.registers.get_flag(H), false);
+        assert_eq!(cpu.registers.get_flag(C), false);
+        assert_eq!(cpu.clock.m, 4);
+    }
 }

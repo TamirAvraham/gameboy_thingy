@@ -16,11 +16,27 @@ pub enum Flags{
     H=0b00100000,
     C=0b00010000,
 }
+impl Default for Registers {
+    fn default() -> Self {
+        Self{
+            a: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+            e: 0,
+            h: 0,
+            l: 0,
+            pc: 0,
+            f:0,
+            sp: 0,
+        }
+    }
+}
 impl Registers {
     #[inline]
     fn combine_u8_to_u16(f:u8,s:u8)->u16{
 
-        ((f as u16)>>8) | s as u16
+        ((f as u16)<<8) | s as u16
     }
     #[inline]
     fn write_u16_into_two_u8(v:u16,f: &mut u8,s: &mut u8){
@@ -57,5 +73,112 @@ impl Registers {
     }
     pub fn get_flag(&self,flags: Flags)->bool{
         self.f&(flags as u8)>0
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_registers() {
+        let registers = Registers::default();
+        assert_eq!(registers.a, 0);
+        assert_eq!(registers.b, 0);
+        assert_eq!(registers.c, 0);
+        assert_eq!(registers.d, 0);
+        assert_eq!(registers.e, 0);
+        assert_eq!(registers.f, 0);
+        assert_eq!(registers.h, 0);
+        assert_eq!(registers.l, 0);
+        assert_eq!(registers.pc, 0);
+        assert_eq!(registers.sp, 0);
+    }
+
+    #[test]
+    fn test_get_bc() {
+        let registers = Registers {
+            b: 0x12,
+            c: 0x34,
+            ..Registers::default()
+        };
+        assert_eq!(registers.get_bc(), 0x1234);
+    }
+
+    #[test]
+    fn test_get_de() {
+        let registers = Registers {
+            d: 0x56,
+            e: 0x78,
+            ..Registers::default()
+        };
+        assert_eq!(registers.get_de(), 0x5678);
+    }
+
+    #[test]
+    fn test_get_hl() {
+        let registers = Registers {
+            h: 0x9A,
+            l: 0xBC,
+            ..Registers::default()
+        };
+        assert_eq!(registers.get_hl(), 0x9ABC);
+    }
+
+    #[test]
+    fn test_write_bc() {
+        let mut registers = Registers::default();
+        registers.write_bc(0x1234);
+        assert_eq!(registers.b, 0x12);
+        assert_eq!(registers.c, 0x34);
+    }
+
+    #[test]
+    fn test_write_de() {
+        let mut registers = Registers::default();
+        registers.write_de(0x5678);
+        assert_eq!(registers.d, 0x56);
+        assert_eq!(registers.e, 0x78);
+    }
+
+    #[test]
+    fn test_write_hl() {
+        let mut registers = Registers::default();
+        registers.write_hl(0x9ABC);
+        assert_eq!(registers.h, 0x9A);
+        assert_eq!(registers.l, 0xBC);
+    }
+
+    #[test]
+    fn test_flag_set() {
+        let mut registers = Registers::default();
+        registers.flag(Flags::Z, true);
+        assert_eq!(registers.get_flag(Flags::Z), true);
+        assert_eq!(registers.f, Flags::Z as u8);
+
+        registers.flag(Flags::N, true);
+        assert_eq!(registers.get_flag(Flags::N), true);
+        assert_eq!(registers.f, ((Flags::Z as u8) | (Flags::N as u8)) as u8);
+    }
+
+    #[test]
+    fn test_flag_clear() {
+        let mut registers = Registers {
+            f: Flags::Z as u8 | Flags::N as u8,
+            ..Registers::default()
+        };
+        registers.flag(Flags::Z, false);
+        assert_eq!(registers.get_flag(Flags::Z), false);
+        assert_eq!(registers.get_flag(Flags::N), true);
+        assert_eq!(registers.f, Flags::N as u8);
+    }
+
+    #[test]
+    fn test_get_flag() {
+        let mut registers = Registers::default();
+        registers.flag(Flags::H, true);
+        assert_eq!(registers.get_flag(Flags::H), true);
+
+        registers.flag(Flags::C, true);
+        assert_eq!(registers.get_flag(Flags::C), true);
     }
 }
