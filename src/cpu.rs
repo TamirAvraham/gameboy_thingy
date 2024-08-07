@@ -144,7 +144,7 @@ impl Cpu {
             .flag(H, (self.registers.a & 0xF) + (value & 0xF) + carry > 0xF)
             .flag(
                 C,
-                (self.registers.a as u16) + (value as u16) + (c as u16) > 0xFF,
+                (self.registers.a as u16) + (value as u16) + (carry as u16) > 0xFF,
             );
         self.clock.m += 4;
     }
