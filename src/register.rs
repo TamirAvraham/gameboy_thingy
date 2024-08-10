@@ -1,3 +1,6 @@
+use crate::helper::{combine_u8_to_u16, split_u16};
+use crate::memory::MEM_SIZE;
+
 pub struct Registers{
     pub a:u8,
     pub b:u8,
@@ -7,8 +10,8 @@ pub struct Registers{
     f:u8,
     pub h:u8,
     pub l:u8,
-    pub pc:u8,
-    pub sp:u8
+    pub pc:u16,
+    pub sp:u16
 }
 pub enum Flags{
     Z=0b10000000,
@@ -28,37 +31,38 @@ impl Default for Registers {
             l: 0,
             pc: 0,
             f:0,
-            sp: 0,
+            sp: (MEM_SIZE - 0xE) as u16,
         }
     }
 }
 impl Registers {
-    #[inline]
-    fn combine_u8_to_u16(f:u8,s:u8)->u16{
 
-        ((f as u16)<<8) | s as u16
-    }
     #[inline]
     fn write_u16_into_two_u8(v:u16,f: &mut u8,s: &mut u8){
-        let [first,second]=v.to_be_bytes();
+        let (first,second)=split_u16(v);
         *f=first;
         *s=second;
     }
     pub fn get_bc(&self)->u16{
-        Self::combine_u8_to_u16(self.b,self.c)
+        combine_u8_to_u16(self.b,self.c)
     }
     pub fn get_de(&self)->u16{
-        Self::combine_u8_to_u16(self.d,self.e)
+        combine_u8_to_u16(self.d,self.e)
     }
     pub fn get_hl(&self)->u16{
-        Self::combine_u8_to_u16(self.h,self.l)
+        combine_u8_to_u16(self.h,self.l)
     }
+    pub fn get_af(&self)->u16{combine_u8_to_u16(self.a,self.f)}
     pub fn write_bc(&mut self,value:u16)->u16{
         Self::write_u16_into_two_u8(value, &mut self.b, &mut self.c);
         value
     }
     pub fn write_de(&mut self,value:u16)->u16{
         Self::write_u16_into_two_u8(value, &mut self.d, &mut self.e);
+        value
+    }
+    pub fn write_af(&mut self,value:u16)->u16{
+        Self::write_u16_into_two_u8(value, &mut self.a, &mut self.f);
         value
     }
     pub fn write_hl(&mut self,value:u16)->u16{
@@ -91,7 +95,7 @@ mod tests {
         assert_eq!(registers.h, 0);
         assert_eq!(registers.l, 0);
         assert_eq!(registers.pc, 0);
-        assert_eq!(registers.sp, 0);
+        assert_eq!(registers.sp, (MEM_SIZE as u16)-0xe);
     }
 
     #[test]
@@ -180,5 +184,24 @@ mod tests {
 
         registers.flag(Flags::C, true);
         assert_eq!(registers.get_flag(Flags::C), true);
+    }
+
+    #[test]
+    fn test_write_af() {
+        let mut registers = Registers::default();
+        let value = 0x1234;
+        registers.write_af(value);
+        assert_eq!(registers.a, 0x12);  // Assuming `a` is the high byte
+        assert_eq!(registers.f, 0x34);  // Assuming `f` is the low byte
+    }
+
+    #[test]
+    fn test_get_af() {
+        let registers = Registers {
+            a: 0x12,
+            f: 0x34,
+            ..Registers::default()
+        };
+        assert_eq!(registers.get_af(), 0x1234);
     }
 }

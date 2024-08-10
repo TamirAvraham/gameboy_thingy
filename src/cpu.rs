@@ -1,3 +1,4 @@
+use crate::memory::Memory;
 use crate::register::Flags::{C, H, N, Z};
 use crate::register::Registers;
 
@@ -7,6 +8,7 @@ struct Clock {
 }
 struct Cpu {
     clock: Clock,
+    memory: Memory,
     registers: Registers,
 }
 enum Register8bit {
@@ -22,6 +24,7 @@ enum Register16bit {
     BC,
     DE,
     HL,
+    SP,
 }
 
 impl Cpu {
@@ -31,6 +34,7 @@ impl Cpu {
             Register16bit::BC => self.registers.get_bc(),
             Register16bit::DE => self.registers.get_de(),
             Register16bit::HL => self.registers.get_hl(),
+            Register16bit::SP => self.registers.sp,
         }
     }
     #[inline]
@@ -39,6 +43,7 @@ impl Cpu {
             Register16bit::BC => self.registers.write_bc(value),
             Register16bit::DE => self.registers.write_de(value),
             Register16bit::HL => self.registers.write_hl(value),
+            Register16bit::SP => self.registers.write_hl(value),
         };
         self.clock.m += 10;
     }
@@ -97,6 +102,10 @@ impl Cpu {
             Register16bit::HL => self
                 .registers
                 .write_hl(self.registers.get_hl().wrapping_add(1)),
+            Register16bit::SP => {
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.sp
+            }
         };
         self.clock.m += 8;
     }
@@ -123,6 +132,10 @@ impl Cpu {
             Register16bit::HL => self
                 .registers
                 .write_hl(self.registers.get_hl().wrapping_sub(1)),
+    Register16bit::SP => {
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.registers.sp
+            }
         };
         self.clock.m += 6;
     }
@@ -137,18 +150,15 @@ impl Cpu {
     #[inline]
     fn add_8bit_value(&mut self, value: u8, use_carry: bool) {
         let carry = self.use_carry(use_carry);
-        let a =self.registers.a;
+        let a = self.registers.a;
         let new_a = a.wrapping_add(value).wrapping_add(carry);
 
         self.registers
             .flag(Z, new_a == 0)
             .flag(N, false)
             .flag(H, (a & 0xF) + (value & 0xF) + carry > 0xF)
-            .flag(
-                C,
-                (a as u16) + (value as u16) + (carry as u16) > 0xFF,
-            );
-        self.registers.a=new_a;
+            .flag(C, (a as u16) + (value as u16) + (carry as u16) > 0xFF);
+        self.registers.a = new_a;
         self.clock.m += 4;
     }
     #[inline]
@@ -156,10 +166,7 @@ impl Cpu {
         let hl = self.registers.get_hl();
         let new_hl = hl.wrapping_add(value);
         self.registers
-            .flag(
-                H,
-                (hl & 0x07FF) + (value & 0x7FF) > 0x07FF,
-            )
+            .flag(H, (hl & 0x07FF) + (value & 0x7FF) > 0x07FF)
             .flag(C, hl > 0xFFFF - value)
             .flag(N, false);
         self.registers.write_hl(new_hl);
@@ -168,30 +175,58 @@ impl Cpu {
     #[inline]
     fn sub_8bit_value(&mut self, value: u8, use_carry: bool) {
         let carry = self.use_carry(use_carry);
-        let a =self.registers.a;
+        let a = self.registers.a;
         let new_a = a.wrapping_sub(value).wrapping_sub(carry);
         self.registers
             .flag(Z, new_a == 0)
             .flag(H, (a & 0x0F) < (value & 0x0F) + carry)
-            .flag(
-                C,
-                (a as u16) < (value as u16) + (carry as u16),
-            )
+            .flag(C, (a as u16) < (value as u16) + (carry as u16))
             .flag(N, true);
         self.registers.a = new_a;
         self.clock.m += 4;
     }
+    fn push(&mut self, v: u16) {
+        self.registers.sp = self.registers.sp.wrapping_sub(2);
+        self.memory.write_word(self.registers.sp, v);
+        self.clock.m+=16;
+    }
+    fn pop(&mut self, register16bit: Register16bit) {
+        let stack_data=self.memory.read_word(self.registers.sp);
+        match register16bit {
+            Register16bit::BC => self
+                .registers
+                .write_bc(stack_data),
+            Register16bit::DE => self
+                .registers
+                .write_de(stack_data),
+            Register16bit::HL => self
+                .registers
+                .write_hl(stack_data),
+            Register16bit::SP => {
+                panic!("cant pop onto sp")
+            }
+        };
+        self.registers.sp = self.registers.sp.wrapping_add(2);
+        self.clock.m+=12;
+    }
 
+    fn pop_af(&mut self){
+        let stack_data=self.memory.read_word(self.registers.sp);
+        self.registers.write_af(stack_data);
+        self.registers.sp=self.registers.sp.wrapping_add(2);
+        self.clock.m+=12;
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::register::Registers;
-
+    const TEST_SP_ADDR:u16=0x000F;
     fn create_cpu() -> Cpu {
         Cpu {
             clock: Clock { m: 0, t: 0 },
-            registers:Registers::default()
+            registers: Registers::default(),
+            memory: Memory::new(),
         }
     }
 
@@ -202,9 +237,18 @@ mod tests {
         cpu.registers.write_de(0x5678);
         cpu.registers.write_hl(0x9ABC);
 
-        assert_eq!(cpu.get_register_from_register16bit(Register16bit::BC), 0x1234);
-        assert_eq!(cpu.get_register_from_register16bit(Register16bit::DE), 0x5678);
-        assert_eq!(cpu.get_register_from_register16bit(Register16bit::HL), 0x9ABC);
+        assert_eq!(
+            cpu.get_register_from_register16bit(Register16bit::BC),
+            0x1234
+        );
+        assert_eq!(
+            cpu.get_register_from_register16bit(Register16bit::DE),
+            0x5678
+        );
+        assert_eq!(
+            cpu.get_register_from_register16bit(Register16bit::HL),
+            0x9ABC
+        );
     }
 
     #[test]
@@ -291,7 +335,7 @@ mod tests {
     #[test]
     fn test_use_carry() {
         let mut cpu = create_cpu();
-        cpu.registers.flag(C,true);
+        cpu.registers.flag(C, true);
         assert_eq!(cpu.use_carry(true), 1);
         assert_eq!(cpu.use_carry(false), 0);
     }
@@ -332,5 +376,73 @@ mod tests {
         assert_eq!(cpu.registers.get_flag(H), false);
         assert_eq!(cpu.registers.get_flag(C), false);
         assert_eq!(cpu.clock.m, 4);
+    }
+    #[test]
+    fn test_push() {
+        let mut cpu = create_cpu();
+        cpu.registers.sp = TEST_SP_ADDR.wrapping_add(2);
+        cpu.push(0x1234);
+
+        assert_eq!(cpu.memory.read_word(TEST_SP_ADDR), 0x1234);
+        assert_eq!(cpu.registers.sp, TEST_SP_ADDR);
+        assert_eq!(cpu.clock.m, 16);
+    }
+
+    #[test]
+    fn test_pop_bc() {
+        let mut cpu = create_cpu();
+        cpu.registers.sp = TEST_SP_ADDR;
+        cpu.memory.write_word(TEST_SP_ADDR, 0x1234);
+        cpu.pop(Register16bit::BC);
+
+        assert_eq!(cpu.registers.get_bc(), 0x1234);
+        assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
+        assert_eq!(cpu.clock.m, 12);
+    }
+
+    #[test]
+    fn test_pop_de() {
+        let mut cpu = create_cpu();
+        cpu.registers.sp = TEST_SP_ADDR;
+        cpu.memory.write_word(TEST_SP_ADDR, 0x5678);
+        cpu.pop(Register16bit::DE);
+
+        assert_eq!(cpu.registers.get_de(), 0x5678);
+        assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
+        assert_eq!(cpu.clock.m, 12);
+    }
+
+    #[test]
+    fn test_pop_hl() {
+        let mut cpu = create_cpu();
+        cpu.registers.sp = TEST_SP_ADDR;
+        cpu.memory.write_word(TEST_SP_ADDR, 0x9ABC);
+        cpu.pop(Register16bit::HL);
+
+        assert_eq!(cpu.registers.get_hl(), 0x9ABC);
+        assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
+        assert_eq!(cpu.clock.m, 12);
+    }
+
+    #[test]
+    #[should_panic(expected = "cant pop onto sp")]
+    fn test_pop_sp_should_panic() {
+        let mut cpu = create_cpu();
+        cpu.registers.sp = TEST_SP_ADDR;
+        cpu.memory.write_word(TEST_SP_ADDR, 0x1234);
+        cpu.pop(Register16bit::SP);
+    }
+
+    #[test]
+    fn test_pop_af() {
+        let mut cpu = create_cpu();
+        cpu.registers.sp = TEST_SP_ADDR;
+        cpu.memory.write_word(TEST_SP_ADDR, 0x5678);
+        cpu.pop_af();
+        assert_eq!(cpu.registers.a,0x56);
+
+        assert_eq!(cpu.registers.get_af(), 0x5678); // Assuming you have a get_af() method
+        assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
+        assert_eq!(cpu.clock.m, 12);
     }
 }
