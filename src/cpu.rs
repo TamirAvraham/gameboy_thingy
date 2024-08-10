@@ -190,8 +190,13 @@ impl Cpu {
         self.memory.write_word(self.registers.sp, v);
         self.clock.m+=16;
     }
-    fn pop(&mut self, register16bit: Register16bit) {
+    fn pop(&mut self)->u16{
         let stack_data=self.memory.read_word(self.registers.sp);
+        self.registers.sp = self.registers.sp.wrapping_add(2);
+        stack_data
+    }
+    fn pop_register16bit(&mut self, register16bit: Register16bit) {
+        let stack_data=self.pop();
         match register16bit {
             Register16bit::BC => self
                 .registers
@@ -206,15 +211,32 @@ impl Cpu {
                 panic!("cant pop onto sp")
             }
         };
-        self.registers.sp = self.registers.sp.wrapping_add(2);
         self.clock.m+=12;
     }
 
-    fn pop_af(&mut self){
-        let stack_data=self.memory.read_word(self.registers.sp);
-        self.registers.write_af(stack_data);
-        self.registers.sp=self.registers.sp.wrapping_add(2);
-        self.clock.m+=12;
+    fn pop_af(&mut self) {
+        self.registers.write_af(self.pop());
+        self.clock.m += 12;
+    }
+    fn call(&mut self,label:u16,cond:bool){
+        if cond {self.push(self.registers.pc.wrapping_add(3));
+        self.registers.pc=label;
+        self.clock.m+=17}else {self.clock.m+=10}
+    }
+    //for some fucking reason pure ret does 10 cycles instead of 11 like the others
+    //so there ia now a new function named pure_ret
+    #[inline(always)]
+    fn pure_ret(&mut self){
+        self.ret(true);
+        self.clock.m-=1;
+    }
+    fn ret(&mut self,cond:bool){
+        if cond {
+            self.registers.pc=self.pop();
+            self.clock.m+=11;
+        } else {
+            self.clock.m+=5;
+        }
     }
 }
 #[cfg(test)]
