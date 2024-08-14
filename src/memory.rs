@@ -25,6 +25,9 @@ impl Memory {
         self.write_byte(location,first);
         self.write_byte(location.wrapping_add(1),second);
     }
+    pub fn get_refm_to_byte(&mut self,location:u16)->&mut u8{
+        &mut self.mem[location as usize]
+    }
 }
 #[cfg(test)]
 mod tests {

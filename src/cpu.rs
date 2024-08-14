@@ -11,6 +11,7 @@ struct Cpu {
     memory: Memory,
     registers: Registers,
 }
+#[derive(Copy, Clone)]
 enum Register8bit {
     A,
     B,
@@ -19,6 +20,7 @@ enum Register8bit {
     E,
     H,
     L,
+    HlDirectMemory
 }
 enum Register16bit {
     BC,
@@ -49,15 +51,8 @@ impl Cpu {
     }
     #[inline]
     fn load_8bit_value_into_register(&mut self, register8bit: Register8bit, value: u8) {
-        match register8bit {
-            Register8bit::A => self.registers.a = value,
-            Register8bit::B => self.registers.b = value,
-            Register8bit::C => self.registers.c = value,
-            Register8bit::D => self.registers.d = value,
-            Register8bit::E => self.registers.e = value,
-            Register8bit::H => self.registers.h = value,
-            Register8bit::L => self.registers.l = value,
-        };
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        *reg=value;
         self.clock.m += 7;
     }
     #[inline(always)]
@@ -82,6 +77,7 @@ impl Cpu {
             Register8bit::E => &mut self.registers.e,
             Register8bit::H => &mut self.registers.h,
             Register8bit::L => &mut self.registers.l,
+            Register8bit::HlDirectMemory => self.memory.get_refm_to_byte(self.registers.get_hl())
         }
     }
     #[inline]
@@ -215,13 +211,14 @@ impl Cpu {
     }
 
     fn pop_af(&mut self) {
-        self.registers.write_af(self.pop());
+        let v = self.pop();
+        self.registers.write_af(v);
         self.clock.m += 12;
     }
     fn call(&mut self,label:u16,cond:bool){
         if cond {self.push(self.registers.pc.wrapping_add(3));
         self.registers.pc=label;
-        self.clock.m+=17}else {self.clock.m+=10}
+        self.clock.m+=1}else {self.clock.m+=10}
     }
     //for some fucking reason pure ret does 10 cycles instead of 11 like the others
     //so there ia now a new function named pure_ret
@@ -237,6 +234,71 @@ impl Cpu {
         } else {
             self.clock.m+=5;
         }
+    }
+
+    /// # Description
+    ///  implements the RST Z80 command. pushes pc onto the stack and replaces its value
+    ///  with `new_pc`
+    /// # Arguments
+    ///
+    /// * `new_pc`: can be `0x00 , 0x10, 0x20, 0x30` *only*. (idk why but that's the way it is in the chip)
+    ///
+    /// returns: ()
+    ///
+    fn rst(&mut self,new_pc:u16){
+        self.push(self.registers.pc.wrapping_add(1));
+        self.registers.pc=new_pc;
+        self.clock.m+=1;
+    }
+    #[inline(always)]
+    fn set_shift_flags(&mut self,result:u8,carry_flag:bool){
+        self.registers.flag(C,carry_flag).flag(Z,result==0).flag(H,false).flag(N,false);
+    }
+    #[inline(always)]
+    fn shift_register8bit(&mut self,register8bit: Register8bit,c_version:bool,flag_check_number:u8,op:fn(u8)->u8){
+        let carry_flag = self.registers.get_flag(C);
+        let reg=self.get_register_refm_from_register_8bit(register8bit);
+        let carry = * reg &flag_check_number == flag_check_number;
+        let res = op(*reg) | if (if c_version {carry} else {carry_flag}){1} else { 0 };
+        *reg = res;
+        self.set_shift_flags(res,carry);
+        self.clock.m+=if let Register8bit::A = register8bit {4} else {8};
+    }
+    fn shift_left(&mut self,register8bit: Register8bit){
+        self.shift_register8bit(register8bit,false,0x80,|n|n<<1);
+    }
+    fn shift_left_c(&mut self,register8bit: Register8bit){
+        self.shift_register8bit(register8bit,true,0x80,|n|n<<1);
+    }
+    fn shift_right_c(&mut self,register8bit: Register8bit){
+        self.shift_register8bit(register8bit,true,0x01,|n| n>>1);
+    }
+    fn shift_right(&mut self,register8bit: Register8bit){
+        self.shift_register8bit(register8bit,false,0x01,|n| n>>1);
+    }
+     fn swap(&mut self,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let new_reg_value = (*reg >> 4) | (*reg << 4);
+         *reg=new_reg_value;
+         self.bit_op_set_flags(new_reg_value);
+        self.clock.m+=2;
+    }
+    fn bit_op_set_flags(&mut self,result:u8){
+        self.registers.flag(Z,result==0).flag(H,false).flag(C,false).flag(N,false);
+    }
+    fn bit_op_register_8bit(&mut self,v:u8,op:fn(u8,u8)->u8){
+        self.registers.a= op(self.registers.a,v);
+        self.bit_op_set_flags(self.registers.a);
+        self.clock.m+=2;
+    }
+    fn or(&mut self,v:u8){
+        self.bit_op_register_8bit(v,|i, i1| i|i1)
+    }
+    fn and(&mut self,v:u8){
+        self.bit_op_register_8bit(v,|i, i1| i&i1)
+    }
+    fn xor(&mut self,v:u8){
+        self.bit_op_register_8bit(v,|i, i1| i^i1)
     }
 }
 #[cfg(test)]
@@ -415,7 +477,7 @@ mod tests {
         let mut cpu = create_cpu();
         cpu.registers.sp = TEST_SP_ADDR;
         cpu.memory.write_word(TEST_SP_ADDR, 0x1234);
-        cpu.pop(Register16bit::BC);
+        cpu.pop_register16bit(Register16bit::BC);
 
         assert_eq!(cpu.registers.get_bc(), 0x1234);
         assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
@@ -427,7 +489,7 @@ mod tests {
         let mut cpu = create_cpu();
         cpu.registers.sp = TEST_SP_ADDR;
         cpu.memory.write_word(TEST_SP_ADDR, 0x5678);
-        cpu.pop(Register16bit::DE);
+        cpu.pop_register16bit(Register16bit::DE);
 
         assert_eq!(cpu.registers.get_de(), 0x5678);
         assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
@@ -439,7 +501,7 @@ mod tests {
         let mut cpu = create_cpu();
         cpu.registers.sp = TEST_SP_ADDR;
         cpu.memory.write_word(TEST_SP_ADDR, 0x9ABC);
-        cpu.pop(Register16bit::HL);
+        cpu.pop_register16bit(Register16bit::HL);
 
         assert_eq!(cpu.registers.get_hl(), 0x9ABC);
         assert_eq!(cpu.registers.sp, TEST_SP_ADDR.wrapping_add(2));
@@ -452,7 +514,7 @@ mod tests {
         let mut cpu = create_cpu();
         cpu.registers.sp = TEST_SP_ADDR;
         cpu.memory.write_word(TEST_SP_ADDR, 0x1234);
-        cpu.pop(Register16bit::SP);
+        cpu.pop_register16bit(Register16bit::SP);
     }
 
     #[test]
