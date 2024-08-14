@@ -300,6 +300,25 @@ impl Cpu {
     fn xor(&mut self,v:u8){
         self.bit_op_register_8bit(v,|i, i1| i^i1)
     }
+    fn cmp(&mut self,v:u8){
+        let a = self.registers.a;
+        self.sub_8bit_value(a,false);
+        self.registers.a=a;
+    }
+    fn jump(&mut self,loc:u16,cond:bool){
+        if cond {
+            self.registers.pc=loc;
+        }
+        self.clock.m+=10;
+    }
+    fn jr(&mut self,loc:i16,cond:bool){
+        if cond {
+            self.registers.pc += if loc.is_negative() { self.registers.pc.wrapping_sub(loc.abs() as u16) } else { self.registers.pc.wrapping_add(loc as u16) };
+            self.clock.m+=13;
+            } else {
+            self.clock.m+=3;
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
