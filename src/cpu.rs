@@ -9,7 +9,9 @@ struct Clock {
     t: u128,
 }
 struct Cpu {
+    ime : bool,
     clock: Clock,
+    halted:bool,
     memory: Memory,
     registers: Registers,
 }
@@ -35,7 +37,7 @@ impl Cpu {
     #[inline]
     fn get_register_from_register16bit(&mut self, register16bit: Register16bit) -> u16 {
         match register16bit {
-            Register16bit::BC => self.registers.get_bc(),
+            BC => self.registers.get_bc(),
             Register16bit::DE => self.registers.get_de(),
             Register16bit::HL => self.registers.get_hl(),
             Register16bit::SP => self.registers.sp,
@@ -361,6 +363,24 @@ impl Cpu {
         self.memory.write_byte(reg,value);
         self.clock.m+=7;
     }
+    fn bit(&mut self,bit:u8,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let res = *reg & (1<<(bit as u32)) == 0;
+        self.registers.flag(N,false).flag(H,true).flag(Z,res);
+        self.clock.m+=8;
+    }
+    fn res(&mut self,bit:u8,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let reg_value = *reg;
+        *reg = reg_value & (1 << bit);
+        self.clock.m+=8;
+    }
+    fn set(&mut self,bit:u8,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let reg_value = *reg;
+        *reg = reg_value | (1 << bit);
+        self.clock.m+=8;
+    }
     fn daa(&mut self){
         let mut a =self.registers.a;
         let mut adjust = if self.registers.get_flag(C) {0x60} else { 0x00 };
@@ -375,6 +395,33 @@ impl Cpu {
         self.registers.flag(C,adjust>=0x60).flag(H,false).flag(Z,a==0);
         self.registers.a=a;
     }
+    fn sla(&mut self,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let v = *reg;
+        let carry_flag = v & 0x80 == 0x80;
+        let res = v <<1;
+        *reg = res;
+        self.registers.flag(Z,v == 0).flag(H,false).flag(N,false).flag(C,carry_flag);
+        self.clock.m+=8;
+    }
+    fn sra(&mut self,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let v = *reg;
+        let carry_flag = v & 0x01 == 0x01;
+        let res = (v >> 1) | (v & 0x80);
+        *reg = res;
+        self.registers.flag(Z,v == 0).flag(H,false).flag(N,false).flag(C,carry_flag);
+        self.clock.m+=8;
+    }
+    fn srl(&mut self,register8bit: Register8bit){
+        let reg = self.get_register_refm_from_register_8bit(register8bit);
+        let v = *reg;
+        let carry_flag = v & 0x01 == 0x01;
+        let res = v >> 1;
+        *reg = res;
+        self.registers.flag(Z,v == 0).flag(H,false).flag(N,false).flag(C,carry_flag);
+        self.clock.m+=8;
+    }
     fn exec(&mut self){
         let op_code = self.read_next();
         match op_code {
@@ -386,7 +433,7 @@ impl Cpu {
             0x05=>self.dec_8bit_register(B),
             0x06 => {let v = self.read_next();self.load_8bit_value_into_register(B,v)}
             0x07 => self.shift_left_c(A),
-            0x08 => todo!("ex op"),
+            0x08 => {let v = self.read_next_word(); self.memory.write_word(v,self.registers.sp);self.clock.m+=20}
             0x09 => self.add_16bit_value(self.registers.get_bc()),
             0x0A => self.load_8bit_value_into_register(A,self.memory.read_byte(self.registers.get_bc())),
             0x0B =>self.dec_16bit_register(BC),
@@ -394,7 +441,7 @@ impl Cpu {
             0x0D => self.dec_8bit_register(Register8bit::C),
             0x0E => {let v = self.read_next();self.load_8bit_value_into_register(Register8bit::C,v)}
             0x0F=> self.shift_right_c(A),
-            0x10=>todo!("stop op"),
+            0x10=>self.clock.m+=4,
             0x11 => {let v =self.read_next_word();self.load_16bit_value_into_register(Register16bit::DE,v)}
             0x12 => self.load_direct_mem(DE,self.registers.a),
             0x13 => self.inc_16bit_register(DE),
@@ -497,7 +544,7 @@ impl Cpu {
             0x73 => self.load_8bit_value_into_register(Register8bit::HlDirectMemory,self.registers.e),
             0x74 => self.load_8bit_value_into_register(Register8bit::HlDirectMemory,self.registers.h),
             0x75 => self.load_8bit_value_into_register(Register8bit::HlDirectMemory,self.registers.l),
-            0x76 => todo!("impl halt"),
+            0x76 => {self.halted=true;self.clock.m+=4}
             0x77 => self.load_8bit_value_into_register(Register8bit::HlDirectMemory,self.registers.a),
             0x78 => self.load_8bit_value_into_register(Register8bit::A,self.registers.b),
             0x79 => self.load_8bit_value_into_register(Register8bit::A,self.registers.c),
@@ -596,7 +643,7 @@ impl Cpu {
             0xD6 => {let v = self.read_next(); self.sub_8bit_value(v,false)}
             0xD7 => self.rst(0x10),
             0xD8 => self.ret(self.registers.get_flag(C)),
-            0xD9 => todo!("impl reti"),
+            0xD9 => {self.ret(true);self.ime=true;}
             0xDA => {let v = self.read_next_word(); self.jump(v, self.registers.get_flag(C))}
             0xDC => {let v = self.read_next_word(); self.call(v, self.registers.get_flag(C))}
             0xDE => {let v = self.read_next(); self.sub_8bit_value(v,true)}
@@ -615,17 +662,279 @@ impl Cpu {
             0xF0 => {let v = self.read_next(); self.load_8bit_value_into_register(A,self.memory.read_byte(0xFF00+(v as u16)))}
             0xF1 => self.pop_af(),
             0xF2 => self.load_8bit_value_into_register(A,self.memory.read_byte(0xFF00+(self.registers.c as u16))),
-            0xF3=>todo!("impl di"),
+            0xF3=>{self.ime=false;self.clock.m+=4}
             0xF5 => self.push(self.registers.get_af()),
             0xF6 => {let v = self.read_next(); self.or(v)}
             0xF7 => self.rst(0x30),
             0xF8 => {let v = self.read_next() as i8 as i16; self.load_16bit_value_into_register(HL,((self.registers.sp as i16) + v) as u16)}
             0xF9 => self.load_16bit_value_into_register(SP,self.registers.get_hl()),
             0xFA => {let v = self.read_next_word(); self.load_8bit_value_into_register(A,self.memory.read_byte(v))}
-            0xFB => todo!("impl ei"),
+            0xFB =>{self.ime=true;self.clock.m+=4}
             0xFE => {let v = self.read_next(); self.cmp(v)}
             0xFF => self.rst(0x38),
             _=>panic!("op code not implemented: {}",op_code)
+        }
+    }
+    fn call_cb(&mut self){
+        let code =self.read_next();
+        match code{
+            0x0 => self.shift_left_c(Register8bit::B),
+            0x1 => self.shift_left_c(Register8bit::C),
+            0x2 => self.shift_left_c(Register8bit::D),
+            0x3 => self.shift_left_c(Register8bit::E),
+            0x4 => self.shift_left_c(Register8bit::H),
+            0x5 => self.shift_left_c(Register8bit::L),
+            0x6 => self.shift_left_c(Register8bit::HlDirectMemory),
+            0x7 => self.shift_left_c(Register8bit::A),
+            0x8 => self.shift_right_c(Register8bit::B),
+            0x9 => self.shift_right_c(Register8bit::C),
+            0xa => self.shift_right_c(Register8bit::D),
+            0xb => self.shift_right_c(Register8bit::E),
+            0xc => self.shift_right_c(Register8bit::H),
+            0xd => self.shift_right_c(Register8bit::L),
+            0xe => self.shift_right_c(Register8bit::HlDirectMemory),
+            0xf => self.shift_right_c(Register8bit::A),
+            0x10 => self.shift_left(Register8bit::B),
+            0x11 => self.shift_left(Register8bit::C),
+            0x12 => self.shift_left(Register8bit::D),
+            0x13 => self.shift_left(Register8bit::E),
+            0x14 => self.shift_left(Register8bit::H),
+            0x15 => self.shift_left(Register8bit::L),
+            0x16 => self.shift_left(Register8bit::HlDirectMemory),
+            0x17 => self.shift_left(Register8bit::A),
+            0x18 => self.shift_right(Register8bit::B),
+            0x19 => self.shift_right(Register8bit::C),
+            0x1a => self.shift_right(Register8bit::D),
+            0x1b => self.shift_right(Register8bit::E),
+            0x1c => self.shift_right(Register8bit::H),
+            0x1d => self.shift_right(Register8bit::L),
+            0x1e => self.shift_right(Register8bit::HlDirectMemory),
+            0x1f => self.shift_right(Register8bit::A),
+            0x20 => self.sla(Register8bit::B),
+            0x21 => self.sla(Register8bit::C),
+            0x22 => self.sla(Register8bit::D),
+            0x23 => self.sla(Register8bit::E),
+            0x24 => self.sla(Register8bit::H),
+            0x25 => self.sla(Register8bit::L),
+            0x26 => self.sla(Register8bit::HlDirectMemory),
+            0x27 => self.sla(Register8bit::A),
+            0x28 => self.sra(Register8bit::B),
+            0x29 => self.sra(Register8bit::C),
+            0x2a => self.sra(Register8bit::D),
+            0x2b => self.sra(Register8bit::E),
+            0x2c => self.sra(Register8bit::H),
+            0x2d => self.sra(Register8bit::L),
+            0x2e => self.sra(Register8bit::HlDirectMemory),
+            0x2f => self.sra(Register8bit::A),
+            0x30 => self.swap(Register8bit::B),
+            0x31 => self.swap(Register8bit::C),
+            0x32 => self.swap(Register8bit::D),
+            0x33 => self.swap(Register8bit::E),
+            0x34 => self.swap(Register8bit::H),
+            0x35 => self.swap(Register8bit::L),
+            0x36 => self.swap(Register8bit::HlDirectMemory),
+            0x37 => self.swap(Register8bit::A),
+            0x38 => self.srl(Register8bit::B),
+            0x39 => self.srl(Register8bit::C),
+            0x3a => self.srl(Register8bit::D),
+            0x3b => self.srl(Register8bit::E),
+            0x3c => self.srl(Register8bit::H),
+            0x3d => self.srl(Register8bit::L),
+            0x3e => self.srl(Register8bit::HlDirectMemory),
+            0x3f => self.srl(Register8bit::A),
+            0x40 => self.bit(0,Register8bit::B),
+            0x41 => self.bit(0,Register8bit::C),
+            0x42 => self.bit(0,Register8bit::D),
+            0x43 => self.bit(0,Register8bit::E),
+            0x44 => self.bit(0,Register8bit::H),
+            0x45 => self.bit(0,Register8bit::L),
+            0x46 => self.bit(0,Register8bit::HlDirectMemory),
+            0x47 => self.bit(0,Register8bit::A),
+            0x48 => self.bit(1,Register8bit::B),
+            0x49 => self.bit(1,Register8bit::C),
+            0x4a => self.bit(1,Register8bit::D),
+            0x4b => self.bit(1,Register8bit::E),
+            0x4c => self.bit(1,Register8bit::H),
+            0x4d => self.bit(1,Register8bit::L),
+            0x4e => self.bit(1,Register8bit::HlDirectMemory),
+            0x4f => self.bit(1,Register8bit::A),
+            0x50 => self.bit(2,Register8bit::B),
+            0x51 => self.bit(2,Register8bit::C),
+            0x52 => self.bit(2,Register8bit::D),
+            0x53 => self.bit(2,Register8bit::E),
+            0x54 => self.bit(2,Register8bit::H),
+            0x55 => self.bit(2,Register8bit::L),
+            0x56 => self.bit(2,Register8bit::HlDirectMemory),
+            0x57 => self.bit(2,Register8bit::A),
+            0x58 => self.bit(3,Register8bit::B),
+            0x59 => self.bit(3,Register8bit::C),
+            0x5a => self.bit(3,Register8bit::D),
+            0x5b => self.bit(3,Register8bit::E),
+            0x5c => self.bit(3,Register8bit::H),
+            0x5d => self.bit(3,Register8bit::L),
+            0x5e => self.bit(3,Register8bit::HlDirectMemory),
+            0x5f => self.bit(3,Register8bit::A),
+            0x60 => self.bit(4,Register8bit::B),
+            0x61 => self.bit(4,Register8bit::C),
+            0x62 => self.bit(4,Register8bit::D),
+            0x63 => self.bit(4,Register8bit::E),
+            0x64 => self.bit(4,Register8bit::H),
+            0x65 => self.bit(4,Register8bit::L),
+            0x66 => self.bit(4,Register8bit::HlDirectMemory),
+            0x67 => self.bit(4,Register8bit::A),
+            0x68 => self.bit(5,Register8bit::B),
+            0x69 => self.bit(5,Register8bit::C),
+            0x6a => self.bit(5,Register8bit::D),
+            0x6b => self.bit(5,Register8bit::E),
+            0x6c => self.bit(5,Register8bit::H),
+            0x6d => self.bit(5,Register8bit::L),
+            0x6e => self.bit(5,Register8bit::HlDirectMemory),
+            0x6f => self.bit(5,Register8bit::A),
+            0x70 => self.bit(6,Register8bit::B),
+            0x71 => self.bit(6,Register8bit::C),
+            0x72 => self.bit(6,Register8bit::D),
+            0x73 => self.bit(6,Register8bit::E),
+            0x74 => self.bit(6,Register8bit::H),
+            0x75 => self.bit(6,Register8bit::L),
+            0x76 => self.bit(6,Register8bit::HlDirectMemory),
+            0x77 => self.bit(6,Register8bit::A),
+            0x78 => self.bit(7,Register8bit::B),
+            0x79 => self.bit(7,Register8bit::C),
+            0x7a => self.bit(7,Register8bit::D),
+            0x7b => self.bit(7,Register8bit::E),
+            0x7c => self.bit(7,Register8bit::H),
+            0x7d => self.bit(7,Register8bit::L),
+            0x7e => self.bit(7,Register8bit::HlDirectMemory),
+            0x7f => self.bit(7,Register8bit::A),
+            0x80 => self.res(0,Register8bit::B),
+            0x81 => self.res(0,Register8bit::C),
+            0x82 => self.res(0,Register8bit::D),
+            0x83 => self.res(0,Register8bit::E),
+            0x84 => self.res(0,Register8bit::H),
+            0x85 => self.res(0,Register8bit::L),
+            0x86 => self.res(0,Register8bit::HlDirectMemory),
+            0x87 => self.res(0,Register8bit::A),
+            0x88 => self.res(1,Register8bit::B),
+            0x89 => self.res(1,Register8bit::C),
+            0x8a => self.res(1,Register8bit::D),
+            0x8b => self.res(1,Register8bit::E),
+            0x8c => self.res(1,Register8bit::H),
+            0x8d => self.res(1,Register8bit::L),
+            0x8e => self.res(1,Register8bit::HlDirectMemory),
+            0x8f => self.res(1,Register8bit::A),
+            0x90 => self.res(2,Register8bit::B),
+            0x91 => self.res(2,Register8bit::C),
+            0x92 => self.res(2,Register8bit::D),
+            0x93 => self.res(2,Register8bit::E),
+            0x94 => self.res(2,Register8bit::H),
+            0x95 => self.res(2,Register8bit::L),
+            0x96 => self.res(2,Register8bit::HlDirectMemory),
+            0x97 => self.res(2,Register8bit::A),
+            0x98 => self.res(3,Register8bit::B),
+            0x99 => self.res(3,Register8bit::C),
+            0x9a => self.res(3,Register8bit::D),
+            0x9b => self.res(3,Register8bit::E),
+            0x9c => self.res(3,Register8bit::H),
+            0x9d => self.res(3,Register8bit::L),
+            0x9e => self.res(3,Register8bit::HlDirectMemory),
+            0x9f => self.res(3,Register8bit::A),
+            0xa0 => self.res(4,Register8bit::B),
+            0xa1 => self.res(4,Register8bit::C),
+            0xa2 => self.res(4,Register8bit::D),
+            0xa3 => self.res(4,Register8bit::E),
+            0xa4 => self.res(4,Register8bit::H),
+            0xa5 => self.res(4,Register8bit::L),
+            0xa6 => self.res(4,Register8bit::HlDirectMemory),
+            0xa7 => self.res(4,Register8bit::A),
+            0xa8 => self.res(5,Register8bit::B),
+            0xa9 => self.res(5,Register8bit::C),
+            0xaa => self.res(5,Register8bit::D),
+            0xab => self.res(5,Register8bit::E),
+            0xac => self.res(5,Register8bit::H),
+            0xad => self.res(5,Register8bit::L),
+            0xae => self.res(5,Register8bit::HlDirectMemory),
+            0xaf => self.res(5,Register8bit::A),
+            0xb0 => self.res(6,Register8bit::B),
+            0xb1 => self.res(6,Register8bit::C),
+            0xb2 => self.res(6,Register8bit::D),
+            0xb3 => self.res(6,Register8bit::E),
+            0xb4 => self.res(6,Register8bit::H),
+            0xb5 => self.res(6,Register8bit::L),
+            0xb6 => self.res(6,Register8bit::HlDirectMemory),
+            0xb7 => self.res(6,Register8bit::A),
+            0xb8 => self.res(7,Register8bit::B),
+            0xb9 => self.res(7,Register8bit::C),
+            0xba => self.res(7,Register8bit::D),
+            0xbb => self.res(7,Register8bit::E),
+            0xbc => self.res(7,Register8bit::H),
+            0xbd => self.res(7,Register8bit::L),
+            0xbe => self.res(7,Register8bit::HlDirectMemory),
+            0xbf => self.res(7,Register8bit::A),
+            0xc0 => self.set(0,Register8bit::B),
+            0xc1 => self.set(0,Register8bit::C),
+            0xc2 => self.set(0,Register8bit::D),
+            0xc3 => self.set(0,Register8bit::E),
+            0xc4 => self.set(0,Register8bit::H),
+            0xc5 => self.set(0,Register8bit::L),
+            0xc6 => self.set(0,Register8bit::HlDirectMemory),
+            0xc7 => self.set(0,Register8bit::A),
+            0xc8 => self.set(1,Register8bit::B),
+            0xc9 => self.set(1,Register8bit::C),
+            0xca => self.set(1,Register8bit::D),
+            0xcb => self.set(1,Register8bit::E),
+            0xcc => self.set(1,Register8bit::H),
+            0xcd => self.set(1,Register8bit::L),
+            0xce => self.set(1,Register8bit::HlDirectMemory),
+            0xcf => self.set(1,Register8bit::A),
+            0xd0 => self.set(2,Register8bit::B),
+            0xd1 => self.set(2,Register8bit::C),
+            0xd2 => self.set(2,Register8bit::D),
+            0xd3 => self.set(2,Register8bit::E),
+            0xd4 => self.set(2,Register8bit::H),
+            0xd5 => self.set(2,Register8bit::L),
+            0xd6 => self.set(2,Register8bit::HlDirectMemory),
+            0xd7 => self.set(2,Register8bit::A),
+            0xd8 => self.set(3,Register8bit::B),
+            0xd9 => self.set(3,Register8bit::C),
+            0xda => self.set(3,Register8bit::D),
+            0xdb => self.set(3,Register8bit::E),
+            0xdc => self.set(3,Register8bit::H),
+            0xdd => self.set(3,Register8bit::L),
+            0xde => self.set(3,Register8bit::HlDirectMemory),
+            0xdf => self.set(3,Register8bit::A),
+            0xe0 => self.set(4,Register8bit::B),
+            0xe1 => self.set(4,Register8bit::C),
+            0xe2 => self.set(4,Register8bit::D),
+            0xe3 => self.set(4,Register8bit::E),
+            0xe4 => self.set(4,Register8bit::H),
+            0xe5 => self.set(4,Register8bit::L),
+            0xe6 => self.set(4,Register8bit::HlDirectMemory),
+            0xe7 => self.set(4,Register8bit::A),
+            0xe8 => self.set(5,Register8bit::B),
+            0xe9 => self.set(5,Register8bit::C),
+            0xea => self.set(5,Register8bit::D),
+            0xeb => self.set(5,Register8bit::E),
+            0xec => self.set(5,Register8bit::H),
+            0xed => self.set(5,Register8bit::L),
+            0xee => self.set(5,Register8bit::HlDirectMemory),
+            0xef => self.set(5,Register8bit::A),
+            0xf0 => self.set(6,Register8bit::B),
+            0xf1 => self.set(6,Register8bit::C),
+            0xf2 => self.set(6,Register8bit::D),
+            0xf3 => self.set(6,Register8bit::E),
+            0xf4 => self.set(6,Register8bit::H),
+            0xf5 => self.set(6,Register8bit::L),
+            0xf6 => self.set(6,Register8bit::HlDirectMemory),
+            0xf7 => self.set(6,Register8bit::A),
+            0xf8 => self.set(7,Register8bit::B),
+            0xf9 => self.set(7,Register8bit::C),
+            0xfa => self.set(7,Register8bit::D),
+            0xfb => self.set(7,Register8bit::E),
+            0xfc => self.set(7,Register8bit::H),
+            0xfd => self.set(7,Register8bit::L),
+            0xfe => self.set(7,Register8bit::HlDirectMemory),
+            0xff => self.set(7,Register8bit::A),
+            _=> panic!("{code} isnt a real cb call")
         }
     }
 }
@@ -636,9 +945,11 @@ mod tests {
     const TEST_SP_ADDR: u16 = 0x000F;
     fn create_cpu() -> Cpu {
         Cpu {
+            ime: false,
             clock: Clock { m: 0, t: 0 },
             registers: Registers::default(),
             memory: Memory::new(),
+            halted: false,
         }
     }
 
