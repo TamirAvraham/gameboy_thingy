@@ -29,6 +29,31 @@ impl Memory {
         }
     }
     pub fn write_byte(&mut self,location:u16,byte:u8){
+        match location {
+            0x0000..=0x00FF => { //bios case.
+                self._bios[location as usize] = byte;
+            }
+            0x0100..=0x3FFF =>{ //rom case
+                self._rom[location as usize] = byte;
+            }
+            0x8000..=0x9FFF=>{ //gpu thing,which we don't yet have
+                //pass for now
+            }
+            0xA000..=0xBFFF=>{
+                self._eram[location as usize] = byte;
+            }
+            0xC000..=0xFDFF=>{ //Don't know yet if i can merge the Working ram with it's shadow, but for now it's what I've have done
+                self._wram[location as usize] = byte;
+            }
+            0xFF80..=0xFFFF=>{
+                self._zram[location as usize] = byte;
+            }
+            //Didn't make cases for sprite information , Memory mapping i/o .. will be adding later on.
+            _=>{
+                //default will pass
+            }
+
+        }
         self.mem[location as usize]=byte;
     }
     pub fn read_byte(&self, location:u16)->u8{
